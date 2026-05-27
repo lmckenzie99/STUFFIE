@@ -11,6 +11,9 @@
 use clap::{ArgGroup, Parser};
 use std::path::PathBuf;
 
+// Local module for config structs and loader function
+mod config;
+
 
 // -----------------------------------------------------------------------------
 // CLI Definition
@@ -118,7 +121,18 @@ fn main() {
     println!("[STUFFIE] Config:  {}", cli.config.display());
     println!("[STUFFIE] Mode:    {:?}", mode);
 
-    // TODO: deserialize PipelineConfig from config file (serde + toml)
+    // Load and deserialize the config file
+    let pipeline_config = match config::load_config(&cli.config) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    };
+
+    println!("[STUFFIE] Pipeline: {}", pipeline_config.pipeline.name);
+    println!("[STUFFIE] Stages:   {}", pipeline_config.stages.len());
+    
     // TODO: check output_dir for .stuffie_checkpoint, prompt resume or restart
     // TODO: iterate stages, spawn subprocesses via tokio::process::Command
 }
