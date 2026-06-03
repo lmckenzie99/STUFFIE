@@ -1,15 +1,17 @@
-//5 - 19 - 2026
+//6 - 2 - 2026
 //STUFFIE: Sequential Task Utility For Flow Integration and Execution
-//First Draft: CLAP Parser + Execution Mode Logic
+//Newest edit: Program Execution Module
 
 
 // -----------------------------------------------------------------------------
 // Imports:
 // - clap for CLI parsing
 // - std::path::PathBuf for filesystem paths
+// - std::process::Command for spawning subprocesses
 // -----------------------------------------------------------------------------
 use clap::{ArgGroup, Parser};
 use std::path::PathBuf;
+use std::process::Command;
 
 // Local module for config structs and loader function
 mod config;
@@ -98,6 +100,59 @@ impl ExecutionMode {
     }
 }
 
+// A demo function to show how we might execute a stage based on the execution mode
+// Using Google Chrome as a demo program to launch
+// run_stages() below is the real implementation to be used.
+fn run_demo_program(mode: &ExecutionMode) {
+    match mode {
+        ExecutionMode::FullAuto => {
+            println!("[STUFFIE] Launching Google Chrome...");
+
+            Command::new("open")
+                .arg("-a")
+                .arg("Google Chrome")
+                .spawn()
+                .expect("Failed to launch Google Chrome");
+        }
+
+        ExecutionMode::SemiAuto => {
+            println!("[STUFFIE] SemiAuto selected (demo not implemented yet)");
+        }
+
+        ExecutionMode::SingleBreak => {
+            println!("[STUFFIE] SingleBreak selected (demo not implemented yet)");
+        }
+    }
+}
+
+// A function to run the stages defined in the config file, demonstrating how we might summon subprocesses
+// For now, it just prints the stage name and simulates running the command.
+fn run_stages(stages: &Vec<config::Stage>) {
+    for stage in stages {
+        println!("[STUFFIE] Running stage: {}", stage.name);
+        
+        let mut cmd = Command::new(&stage.cmd);
+        
+        // If the stage has args, add them to the command
+        if let Some(args) = &stage.args {
+            cmd.args(args);
+        }
+        
+        // Spawn the command and wait for it to finish, checking the exit status
+        let status = cmd.status()
+            .expect(&format!("Failed to launch stage: {}", stage.name));
+        
+        // If the command failed (non-zero exit code), print an error and exit the whole program
+        if !status.success() {
+            eprintln!("[STUFFIE] Stage '{}' failed with exit code {:?}", stage.name, status.code());
+            std::process::exit(1);
+        }
+        
+        // Or else, print that the stage completed successfully
+        println!("[STUFFIE] Stage '{}' completed ", stage.name);
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Entry Point
 // -----------------------------------------------------------------------------
@@ -132,7 +187,10 @@ fn main() {
 
     println!("[STUFFIE] Pipeline: {}", pipeline_config.pipeline.name);
     println!("[STUFFIE] Stages:   {}", pipeline_config.stages.len());
-    
+
+    //Running stages is the core of the program execution module, 
+    //So we'll call a function named run_stages and pass in a reference to the stages vector from the pipeline config.
+    run_stages(&pipeline_config.stages);
+
     // TODO: check output_dir for .stuffie_checkpoint, prompt resume or restart
-    // TODO: iterate stages, spawn subprocesses via tokio::process::Command
 }

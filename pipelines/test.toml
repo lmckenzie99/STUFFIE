@@ -4,12 +4,13 @@ output_dir = "/tmp/stuffie_test/output"
 source_dir = "/tmp/stuffie_test/input"
 
 [[stages]]
-name = "preprocess"
-cmd = "./bin/preprocess"
-args = ["--input", "/tmp/input", "--output", "/tmp/output"]
+name = "list_files"
+cmd = "ls"
+args = ["-la"]
 qa = false
 
 [[stages]]
-name = "transform"
-cmd = "./bin/transform"
-qa = true
+name = "print_date"
+cmd = "date"
+qa = false
+
