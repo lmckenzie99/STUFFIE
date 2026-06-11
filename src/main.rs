@@ -1,17 +1,17 @@
-//6 - 2 - 2026
+//6 - 7 - 2026
 //STUFFIE: Sequential Task Utility For Flow Integration and Execution
-//Newest edit: Program Execution Module
+//Newest edit: Async Subprocesses + Demo Program Updates
 
 
 // -----------------------------------------------------------------------------
 // Imports:
 // - clap for CLI parsing
 // - std::path::PathBuf for filesystem paths
-// - std::process::Command for spawning subprocesses
+// - tokio::process::Command for asynchronous subprocess management
 // -----------------------------------------------------------------------------
 use clap::{ArgGroup, Parser};
 use std::path::PathBuf;
-use std::process::Command;
+use tokio::process::Command; 
 
 // Local module for config structs and loader function
 mod config;
@@ -100,34 +100,67 @@ impl ExecutionMode {
     }
 }
 
+//run_one is a helper function to run a single command with arguments, and print the output or error
+async fn run_one(cmd: &str, args: &[&str]) {
+    println!("[STUFFIE] Running command: {} {}", cmd, args.join(" "));
+
+    let output = Command::new(cmd)
+        .args(args)
+        .output()
+        .await
+        .expect(&format!("Failed to execute command: {} {}", cmd, args.join(" ")));
+
+        if output.status.success(){
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            println!("[STUFFIE] Command output: {}", stdout);
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("[STUFFIE] Command error: {}", stderr);
+
+        }
+}
+
 // A demo function to show how we might execute a stage based on the execution mode
 // Using Google Chrome as a demo program to launch
 // run_stages() below is the real implementation to be used.
-fn run_demo_program(mode: &ExecutionMode) {
+async fn run_demo_program(mode: &ExecutionMode) {
     match mode {
         ExecutionMode::FullAuto => {
-            println!("[STUFFIE] Launching Google Chrome...");
+            println!("[STUFFIE] FullAuto selected, running demo program...");
+            println!("[STUFFIE] Launching Google Chrome and Date...");
 
-            Command::new("open")
-                .arg("-a")
-                .arg("Google Chrome")
-                .spawn()
-                .expect("Failed to launch Google Chrome");
+            tokio::join!(
+                run_one("open", &["-a", "Google Chrome"]),
+                run_one("date", &[]),
+            );
+
+            
         }
 
         ExecutionMode::SemiAuto => {
-            println!("[STUFFIE] SemiAuto selected (demo not implemented yet)");
+            println!("[STUFFIE] SemiAuto selected, running demo program...");
+            println!("[STUFFIE] Launching Safari...");
+            
+            run_one("open", &["-a", "Safari"]).await;
+            
+
         }
 
         ExecutionMode::SingleBreak => {
-            println!("[STUFFIE] SingleBreak selected (demo not implemented yet)");
+            println!("[STUFFIE] SingleBreak selected, running demo program...");
+            println!("[STUFFIE] Launching Calendar...");
+
+           
+            run_one("open", &["-a", "Calendar"]).await;
+            
         }
     }
 }
 
 // A function to run the stages defined in the config file, demonstrating how we might summon subprocesses
 // For now, it just prints the stage name and simulates running the command.
-fn run_stages(stages: &Vec<config::Stage>) {
+// Async because we'll want to await the completion of each stage before moving on to the next one, and also to handle any potential errors that might arise from running the commands.
+async fn run_stages(stages: &Vec<config::Stage>) {
     for stage in stages {
         println!("[STUFFIE] Running stage: {}", stage.name);
         
@@ -139,7 +172,8 @@ fn run_stages(stages: &Vec<config::Stage>) {
         }
         
         // Spawn the command and wait for it to finish, checking the exit status
-        let status = cmd.status()
+        // await the status of the command, and if it fails, print an error and exit the whole program
+        let status = cmd.status().await
             .expect(&format!("Failed to launch stage: {}", stage.name));
         
         // If the command failed (non-zero exit code), print an error and exit the whole program
@@ -157,7 +191,9 @@ fn run_stages(stages: &Vec<config::Stage>) {
 // Entry Point
 // -----------------------------------------------------------------------------
 
-fn main() {
+// Using tokio main macro to allow for async main function, which is necessary for awaiting the completion of subprocesses in run_stages
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
     
     // Call the from_cli function that belongs to ExecutionMode, passing in a reference to cli, 
@@ -190,7 +226,8 @@ fn main() {
 
     //Running stages is the core of the program execution module, 
     //So we'll call a function named run_stages and pass in a reference to the stages vector from the pipeline config.
-    run_stages(&pipeline_config.stages);
-
+    // run_stages will be an async function that iterates through the stages, runs each command, and awaits its completion before moving on to the next one.
+    run_stages(&pipeline_config.stages).await;
+    run_demo_program(&mode).await;
     // TODO: check output_dir for .stuffie_checkpoint, prompt resume or restart
 }
