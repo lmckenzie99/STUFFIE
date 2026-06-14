@@ -1,17 +1,28 @@
-//6 - 7 - 2026
-//STUFFIE: Sequential Task Utility For Flow Integration and Execution
-//Newest edit: Async Subprocesses + Demo Program Updates
+// 6 - 14 - 2026
+// STUFFIE: Sequential Task Utility For Flow Integration and Execution
+// Newest edit: Logging the combined stdout and stderr of each stage to a log file in the output directory, 
+// and improving error handling when a stage fails by printing the exit code. Also added comments throughout the code for clarity.
 
+// Next edit: Ensuring functionality and cleaning up comments, preparing to complete STUFFIE v1 
+
+// The main entry point for the STUFFIE pipeline orchestrator.
+// This file defines the CLI, loads the config, and runs the stages in sequence based on
 
 // -----------------------------------------------------------------------------
 // Imports:
 // - clap for CLI parsing
 // - std::path::PathBuf for filesystem paths
+// - std::path::Path for path manipulation
 // - tokio::process::Command for asynchronous subprocess management
+// - tracing and tracing_subscriber for logging
+// - config module for config structs and loader function
 // -----------------------------------------------------------------------------
 use clap::{ArgGroup, Parser};
 use std::path::PathBuf;
+use std::path::Path;
 use tokio::process::Command; 
+use tracing::{info, error};
+use tracing_subscriber;
 
 // Local module for config structs and loader function
 mod config;
@@ -160,11 +171,24 @@ async fn run_demo_program(mode: &ExecutionMode) {
 // A function to run the stages defined in the config file, demonstrating how we might summon subprocesses
 // For now, it just prints the stage name and simulates running the command.
 // Async because we'll want to await the completion of each stage before moving on to the next one, and also to handle any potential errors that might arise from running the commands.
-async fn run_stages(stages: &Vec<config::Stage>) {
+async fn run_stages(stages: &Vec<config::Stage>, output_dir: &Path) {
+    
+    let log_dir = output_dir.join("logs");
+
+    // Create the log directory if it doesn't exist, using tokio's async fs functions. If it fails, print an error and exit.
+    let create_dirs = tokio::fs::create_dir_all(&log_dir).await;
+
+    if let Err(e) = create_dirs {
+        error!("[STUFFIE] Failed to create log directory: {}", e);
+        std::process::exit(1);
+    }
+
     for stage in stages {
-        println!("[STUFFIE] Running stage: {}", stage.name);
+        info!("[STUFFIE] Running stage: {}", stage.name);
         
         let mut cmd = Command::new(&stage.cmd);
+
+        let log_file = log_dir.join(format!("{}.log", stage.name.replace(" ", "_")));
         
         // If the stage has args, add them to the command
         if let Some(args) = &stage.args {
@@ -173,17 +197,25 @@ async fn run_stages(stages: &Vec<config::Stage>) {
         
         // Spawn the command and wait for it to finish, checking the exit status
         // await the status of the command, and if it fails, print an error and exit the whole program
-        let status = cmd.status().await
+        let output = cmd.output().await
             .expect(&format!("Failed to launch stage: {}", stage.name));
         
-        // If the command failed (non-zero exit code), print an error and exit the whole program
-        if !status.success() {
-            eprintln!("[STUFFIE] Stage '{}' failed with exit code {:?}", stage.name, status.code());
+        // Write the combined stdout and stderr to a log file for this stage
+        let mut log_contents = output.stdout.clone();
+            log_contents.extend_from_slice(&output.stderr); 
+        
+        // Using tokio's async fs functions to write the log file, and if it fails, print an error and exit
+        tokio::fs::write(&log_file, log_contents).await
+            .expect(&format!("Failed to write log file: {}", log_file.display()));
+        
+            // If the command failed (non-zero exit code), print an error and exit the whole program
+        if !output.status.success() {
+            error!("[STUFFIE] Stage '{}' failed with exit code {:?}", stage.name, output.status.code());
             std::process::exit(1);
         }
         
         // Or else, print that the stage completed successfully
-        println!("[STUFFIE] Stage '{}' completed ", stage.name);
+        info!("[STUFFIE] Stage '{}' completed ", stage.name);
     }
 }
 
@@ -194,6 +226,13 @@ async fn run_stages(stages: &Vec<config::Stage>) {
 // Using tokio main macro to allow for async main function, which is necessary for awaiting the completion of subprocesses in run_stages
 #[tokio::main]
 async fn main() {
+    // Initialize the tracing subscriber for logging. This sets up the global default subscriber that will handle all log events and write everything to the console.
+    // Changed it to remove the need to run RUST_LOG=debug when running the program, and to include timestamps in the logs for better visibility.
+
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+            .init();
+
     let cli = Cli::parse();
     
     // Call the from_cli function that belongs to ExecutionMode, passing in a reference to cli, 
@@ -202,32 +241,28 @@ async fn main() {
 
     // Validate that the config file actually exists before doing anything else
     if !cli.config.exists() {
-        eprintln!(
-            "[STUFFIE] Error: config file not found: {}",
-            cli.config.display()
-        );
+        error!("[STUFFIE] Error: config file not found: {}", cli.config.display());
         std::process::exit(1);
     }
 
-    println!("[STUFFIE] Config:  {}", cli.config.display());
-    println!("[STUFFIE] Mode:    {:?}", mode);
+    info!("[STUFFIE] Config:  {}", cli.config.display());
+    info!("[STUFFIE] Mode:    {:?}", mode);
 
     // Load and deserialize the config file
     let pipeline_config = match config::load_config(&cli.config) {
         Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!("{}", e);
+            error!("[STUFFIE] Error loading config: {}", e);
             std::process::exit(1);
         }
     };
 
-    println!("[STUFFIE] Pipeline: {}", pipeline_config.pipeline.name);
-    println!("[STUFFIE] Stages:   {}", pipeline_config.stages.len());
+    info!("[STUFFIE] Pipeline: {}", pipeline_config.pipeline.name);
+    info!("[STUFFIE] Stages:   {}", pipeline_config.stages.len());
 
     //Running stages is the core of the program execution module, 
     //So we'll call a function named run_stages and pass in a reference to the stages vector from the pipeline config.
     // run_stages will be an async function that iterates through the stages, runs each command, and awaits its completion before moving on to the next one.
-    run_stages(&pipeline_config.stages).await;
+    run_stages(&pipeline_config.stages, &pipeline_config.pipeline.output_dir).await;
     run_demo_program(&mode).await;
-    // TODO: check output_dir for .stuffie_checkpoint, prompt resume or restart
 }
