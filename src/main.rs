@@ -1,12 +1,9 @@
-// 6 - 14 - 2026
+// 6 - 20 - 2026
 // STUFFIE: Sequential Task Utility For Flow Integration and Execution
-// Newest edit: Logging the combined stdout and stderr of each stage to a log file in the output directory, 
-// and improving error handling when a stage fails by printing the exit code. Also added comments throughout the code for clarity.
-
-// Next edit: Ensuring functionality and cleaning up comments, preparing to complete STUFFIE v1 
+// Newest edit: Finalizing v1 of STUFFIE, cleaning up code, adding comments, and preparing for release.
 
 // The main entry point for the STUFFIE pipeline orchestrator.
-// This file defines the CLI, loads the config, and runs the stages in sequence based on
+// This file defines the CLI, loads the config, and runs the stages in sequence based on the selected execution mode.
 
 // -----------------------------------------------------------------------------
 // Imports:
@@ -17,6 +14,7 @@
 // - tracing and tracing_subscriber for logging
 // - config module for config structs and loader function
 // -----------------------------------------------------------------------------
+
 use clap::{ArgGroup, Parser};
 use std::path::PathBuf;
 use std::path::Path;
@@ -27,13 +25,11 @@ use tracing_subscriber;
 // Local module for config structs and loader function
 mod config;
 
-
 // -----------------------------------------------------------------------------
 // CLI Definition
 // -----------------------------------------------------------------------------
 
-
-// using parser and debug derives for easy CLI parsing and debugging
+// Using parser and debug derives for easy CLI parsing and debugging
 #[derive(Parser, Debug)]
 // clap command attributes for name, version, about, and long_about
 #[command(name = "stuffie")]
@@ -47,15 +43,15 @@ Execution modes are mutually exclusive — exactly one must be provided.
 ")]
 
 
-// defining an argument group named "mode" that requires exactly one of the three execution mode flags
+// Defining an argument group named "mode" that requires exactly one of the three execution mode flags
 #[command(group(
     ArgGroup::new("mode")
         .required(true)
         .args(["full_auto", "semi_auto", "single_break"])
 ))]
 
-// the CLI struct with fields for config path and execution mode flags
-// the config field is a required PathBuf with short and long flags
+// The CLI struct with fields for config path and execution mode flags
+// The config field is a required PathBuf with short and long flags
 struct Cli {
     /// Path to the pipeline config file
     #[arg(short = 'c', long = "config", required = true, value_name = "FILE")]
@@ -80,7 +76,6 @@ struct Cli {
 
 /// Represents the three mutually exclusive execution modes STUFFIE supports.
 /// Derived from the raw CLI flags so downstream logic never touches bools.
-
 
 
 #[derive(Debug)]
@@ -169,7 +164,6 @@ async fn run_demo_program(mode: &ExecutionMode) {
 }
 
 // A function to run the stages defined in the config file, demonstrating how we might summon subprocesses
-// For now, it just prints the stage name and simulates running the command.
 // Async because we'll want to await the completion of each stage before moving on to the next one, and also to handle any potential errors that might arise from running the commands.
 async fn run_stages(stages: &Vec<config::Stage>, output_dir: &Path) {
     
@@ -260,8 +254,8 @@ async fn main() {
     info!("[STUFFIE] Pipeline: {}", pipeline_config.pipeline.name);
     info!("[STUFFIE] Stages:   {}", pipeline_config.stages.len());
 
-    //Running stages is the core of the program execution module, 
-    //So we'll call a function named run_stages and pass in a reference to the stages vector from the pipeline config.
+    // Running stages is the core of the program execution module, 
+    // So we'll call a function named run_stages and pass in a reference to the stages vector from the pipeline config.
     // run_stages will be an async function that iterates through the stages, runs each command, and awaits its completion before moving on to the next one.
     run_stages(&pipeline_config.stages, &pipeline_config.pipeline.output_dir).await;
     run_demo_program(&mode).await;
