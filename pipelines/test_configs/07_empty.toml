@@ -1,0 +1,6 @@
+stages = []
+
+[pipeline]
+name = "Empty Pipeline"
+output_dir = "./test_output/07_empty"
+source_dir = "."

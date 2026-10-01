@@ -1,0 +1,10 @@
+[pipeline]
+name = "Grandchild"
+output_dir = "./test_output/06_grandchild"
+source_dir = "."
+
+[[stages]]
+name = "Grandchild Stage"
+type = "command"
+cmd = "echo"
+args = ["GRANDCHILD"]

@@ -1,0 +1,10 @@
+[pipeline]
+name = "Basic Test"
+output_dir = "./test_output/01_basic"
+source_dir = "."
+
+[[stages]]
+name = "Hello"
+type = "command"
+cmd = "echo"
+args = ["Hello, STUFFIE!"]

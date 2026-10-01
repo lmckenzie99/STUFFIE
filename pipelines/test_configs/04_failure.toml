@@ -1,0 +1,16 @@
+[pipeline]
+name = "Failure Test"
+output_dir = "./test_output/04_failure"
+source_dir = "."
+
+[[stages]]
+name = "Failure"
+type = "command"
+cmd = "sh"
+args = ["-c", "echo FAILURE_STDOUT; echo FAILURE_STDERR >&2; exit 7"]
+
+[[stages]]
+name = "Never"
+type = "command"
+cmd = "echo"
+args = ["THIS SHOULD NOT RUN"]

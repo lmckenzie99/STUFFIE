@@ -179,8 +179,6 @@ async fn run_stages(stages: &Vec<config::Stage>, output_dir: &Path) {
 
     for stage in stages {
         info!("[STUFFIE] Running stage: {}", stage.name);
-        
-        let mut cmd = Command::new(&stage.cmd);
 
         let log_file = log_dir.join(format!("{}.log", stage.name.replace(" ", "_")));
         

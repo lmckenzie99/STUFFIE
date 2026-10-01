@@ -1,0 +1,23 @@
+[pipeline]
+name = "QA Test"
+output_dir = "./test_output/13_qa"
+source_dir = "."
+
+[[stages]]
+name = "First"
+type = "command"
+cmd = "echo"
+args = ["FIRST"]
+
+[[stages]]
+name = "QA Stage"
+qa = true
+type = "command"
+cmd = "echo"
+args = ["QA"]
+
+[[stages]]
+name = "Third"
+type = "command"
+cmd = "echo"
+args = ["THIRD"]

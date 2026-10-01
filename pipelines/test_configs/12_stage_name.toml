@@ -1,0 +1,10 @@
+[pipeline]
+name = "Stage Name Test"
+output_dir = "./test_output/12_stage_name"
+source_dir = "."
+
+[[stages]]
+name = "My Test Stage"
+type = "command"
+cmd = "echo"
+args = ["NAMED"]

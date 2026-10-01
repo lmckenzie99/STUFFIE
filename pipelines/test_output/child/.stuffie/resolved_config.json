@@ -1,0 +1,1 @@
+{"name":"child_pipeline","output_dir":"./test_output/child","source_dir":"./test_source","stages":[{"name":"Child First","qa":true,"kind":{"Command":{"cmd":"echo","args":["Child first stage completed"]}}},{"name":"Child Second","qa":false,"kind":{"Command":{"cmd":"echo","args":["Child second stage completed"]}}}],"mode":"semi_auto"}

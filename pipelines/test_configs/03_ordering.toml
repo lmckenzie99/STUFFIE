@@ -1,0 +1,22 @@
+[pipeline]
+name = "Ordering Test"
+output_dir = "./test_output/03_ordering"
+source_dir = "."
+
+[[stages]]
+name = "First"
+type = "command"
+cmd = "echo"
+args = ["FIRST"]
+
+[[stages]]
+name = "Second"
+type = "command"
+cmd = "echo"
+args = ["SECOND"]
+
+[[stages]]
+name = "Third"
+type = "command"
+cmd = "echo"
+args = ["THIRD"]

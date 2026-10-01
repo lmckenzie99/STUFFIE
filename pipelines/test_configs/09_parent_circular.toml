@@ -1,0 +1,9 @@
+[pipeline]
+name = "Circular A"
+output_dir = "./test_output/09_circular_a"
+source_dir = "."
+
+[[stages]]
+name = "B"
+type = "pipeline"
+path = "09_child_circular.toml"

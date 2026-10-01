@@ -1,0 +1,9 @@
+[pipeline]
+name = "Missing Child"
+output_dir = "./test_output/11_missing_child"
+source_dir = "."
+
+[[stages]]
+name = "Missing Child"
+type = "pipeline"
+path = "does_not_exist.toml"

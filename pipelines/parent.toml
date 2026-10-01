@@ -1,0 +1,22 @@
+[pipeline]
+name = "parent_pipeline"
+output_dir = "./test_output/parent"
+source_dir = "./test_source"
+mode = "single_break"
+
+[[stages]]
+name = "Parent First"
+type = "command"
+cmd = "echo"
+args = ["Parent stage completed"]
+
+[[stages]]
+name = "Child Pipeline"
+type = "pipeline"
+path = "child.toml"
+
+[[stages]]
+name = "Parent Final"
+type = "command"
+cmd = "echo"
+args = ["Parent final stage completed"]
