@@ -1,9 +1,0 @@
-[pipeline]
-name = "Nested Child"
-output_dir = "./test_output/06_child"
-source_dir = "."
-
-[[stages]]
-name = "Child"
-type = "pipeline"
-path = "grandchild/06_grandchild.toml"

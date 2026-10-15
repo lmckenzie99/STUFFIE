@@ -1,9 +1,0 @@
-[pipeline]
-name = "Circular B"
-output_dir = "./test_output/09_circular_b"
-source_dir = "."
-
-[[stages]]
-name = "A"
-type = "pipeline"
-path = "09_parent_circular.toml"
