@@ -1,10 +1,10 @@
 [package]
 name = "stuffie"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 authors = [
+    "Julianna Della Selva <julianna.dellaselva@uri.edu>",
     "Liam McKenzie <liam.mckenzie@uri.edu>",
-    "Julianna Della Selva <julianna.dellaselva@uri.edu>"
 ]
 [dependencies]
 clap = { version = "4", features = ["derive"] }

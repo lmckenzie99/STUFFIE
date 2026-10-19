@@ -1,39 +1,20 @@
-/* 9 - 30 - 2026
-    STUFFIE: Sequential Task Utility For Flow Integration and Execution
-    Configuration File, for loading and resolving the pipeline configuration from a TOML file.
-
---------------------------------------------------------------------------------
-Crates used:
-    serde
-        Used for Deserialization and Serialization of TOML files inputted by users
-        Moving from TOML to Rust structs for easier manipulation and access
-        Moving from Rust structs to TOML for saving resolved configurations
-    std::fs
-        Used for reading in the configuration file from the filesystem (fs)
-    std::io
-        Used for handling input/output operations, such as reading from and writing to files
-    std::path::PathBuf
-        Used for representing file paths in a platform-independent way
---------------------------------------------------------------------------------
-*/
+//! STUFFIE: Sequential Task Utility For Flow Integration and Execution
+//! Configuration File, for loading and resolving the pipeline configuration from a TOML file.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-/*
-------------------------------------------------------------------------------
-Configuring the serialization and deserialization of the configuration file
-(Going from the TOML file to Rust structs and back)
-
-ExecutionMode: An enum representing the execution mode of the pipeline, either FullAuto, SemiAuto, or SingleBreak.
-PipelineConfig: The top-level configuration struct, containing the pipeline and its stages.
-Pipeline: Represents the pipeline itself, including its name, output directory, and source directory.
-Stage: Represents a single stage in the pipeline, which can be either a command or a child pipeline.
-StageKind: An enum representing the kind of stage, either a command or a child pipeline.
-
-------------------------------------------------------------------------------
-*/
+/// # Configuration Serialization and Deserialization
+///
+/// Defines the types used to serialize and deserialize the TOML configuration
+/// file.
+///
+/// - [`ExecutionMode`] represents the pipeline's execution mode.
+/// - [`PipelineConfig`] is the top-level configuration structure.
+/// - [`Pipeline`] represents the pipeline metadata.
+/// - [`Stage`] represents an individual pipeline stage.
+/// - [`StageKind`] identifies a command or child-pipeline stage.
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
@@ -77,21 +58,15 @@ pub enum StageKind {
     },
 }
 
-/*
-------------------------------------------------------------------------------
-Configuring child pipelines and resolving the configuration into a fully resolved structure
-New feature to handle child pipelines, allowing for nested pipeline execution and configuration resolution.
-
-The main difference between the original configuration and the resolved configuration is that the resolved configuration includes the fully resolved stages,
-including any child pipelines that have been resolved into their own ResolvedPipelineConfig structs.
-
-If a single STUFFIE instance is running a pipeline without child pipelines, the resolved configuration will be the same as the original configuration.
-
-ResolvedStageKind: An enum representing the resolved kind of stage, either a command or a resolved child pipeline.
-ResolvedStage: Represents a single resolved stage in the pipeline, including its name, QA flag, and resolved kind.
-ResolvedPipelineConfig: Represents the fully resolved pipeline configuration, including its name, output directory, source directory, and resolved stages.
-------------------------------------------------------------------------------
-*/
+/// Configures child pipelines and resolves the configuration into a fully
+/// resolved structure.
+///
+/// The resolved configuration includes all stages, including child pipelines
+/// resolved into their own [`ResolvedPipelineConfig`] values. Without child
+/// pipelines, it is equivalent to the original configuration.
+///
+/// [`ResolvedStageKind`] represents a command or resolved child pipeline.
+/// [`ResolvedStage`] represents a resolved stage with its name, QA flag, and resolved kind.
 
 #[derive(Serialize, Deserialize)]
 pub enum ResolvedStageKind {
@@ -118,25 +93,15 @@ pub struct ResolvedPipelineConfig {
     pub mode: ExecutionMode,
 }
 
-/*
-------------------------------------------------------------------------------
-New features for loading and resolving the configuration, including child pipelines.
-
-load_config:
-    Loads the configuration from a TOML file and parses it into a PipelineConfig struct,
-    utilizing the serde crate for deserialization.
-    Returns a Result containing the PipelineConfig or an error message.
-resolve_config:
-    Resolves the configuration, including any child pipelines, into a fully resolved structure.
-    Returns a Result containing the ResolvedPipelineConfig or an error message.
-------------------------------------------------------------------------------
-*/
+/// Loads and resolves configuration, including child pipelines.
+///
+/// - [`load_config`] loads a TOML file into a [`PipelineConfig`].
+/// - [`resolve_config`] resolves child pipelines into a [`ResolvedPipelineConfig`].
 
 pub fn load_config(path: &PathBuf) -> Result<PipelineConfig, String> {
     let contents = fs::read_to_string(path)
         .map_err(|e| format!("[STUFFIE] Failed to read config file: {}", e))?;
 
-    // Parse the string into PipelineConfig struct
     let config: PipelineConfig = toml::from_str(&contents)
         .map_err(|e| format!("[STUFFIE] Failed to parse config file: {}", e))?;
 
@@ -183,13 +148,6 @@ pub fn resolve_config(
             kind: resolved_kind,
         });
     }
-
-    /*
-    ------------------------------------------------------------------------------
-    Resolved configuration is returned, containing the fully resolved stages,
-    including any child pipelines that have been resolved into their own ResolvedPipelineConfig structs.
-    ------------------------------------------------------------------------------
-    */
 
     Ok(ResolvedPipelineConfig {
         name: config.pipeline.name,

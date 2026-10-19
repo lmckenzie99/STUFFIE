@@ -1,25 +1,7 @@
-/* 10 - 15 - 2026
-STUFFIE: Sequential Task Utility For Flow Integration and Execution
-main.rs, the main entry point for the STUFFIE program, responsible for parsing command line arguments, loading the pipeline configuration, and executing the stages of the pipeline.
-
------------------------------------------------
-Crates used
-    clap
-        Used for parsing command line arguments and options
-    std
-        path: Used for handling file paths and directories
-        io: Used for reading input from stdin and handling I/O operations
-        process: Used for spawning and managing child processes
-    tokio
-        Used for asynchronous programming, allowing for concurrent execution of tasks
-    time
-        Used for measuring the duration of each stage's execution
-    serde
-        Used for serialization and deserialization of configuration files and checkpoint data
-    tracing
-        Used for logging and tracing the execution of the pipeline and its stages
------------------------------------------------
-*/
+//! STUFFIE: Sequential Task Utility For Flow Integration and Execution.
+//!
+//! The main entry point for STUFFIE, responsible for parsing command-line
+//! arguments, loading pipeline configurations, and executing pipeline stages.
 
 use clap::{ArgGroup, Parser};
 use serde::{Deserialize, Serialize};
@@ -33,7 +15,9 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 mod config;
 
-// clap command line argument parsing
+/// Command-line arguments and options for STUFFIE.
+///
+/// Uses `clap` to parse configuration sources and execution modes.
 #[derive(Parser, Debug)]
 #[command(name = "stuffie")]
 #[command(version)]
@@ -42,48 +26,33 @@ mod config;
 STUFFIE is a minimal pipeline orchestrator for sequential multi-stage workflows.
 Each stage invokes a standalone program. Pipelines are defined in TOML config files.
 ")]
-/*
-Command Groups
-    mode: Execution modes are mutually exclusive — exactly one must be provided.
-        full_auto: Executes all stages without pausing for user input.
-        semi_auto: Pauses for user input only on stages marked with qa = true in the TOML file.
-        single_break: Pauses for user input after every stage, regardless of the qa setting.
 
-    config_source: Configuration source is mutually exclusive — exactly one must be provided.
-        config: Specifies the path to the TOML configuration file.
-        resolved_config: Specifies the path to a resolved configuration file.
-*/
+/// The execution mode to use.
+///
+/// full_auto: Execute all stages without pausing for user input.
+/// semi_auto: Pause for user input only on stages marked with qa = true in the TOML file.
+/// single_break: Pause for user input after every stage, regardless of the qa setting.
 #[command(group(
     ArgGroup::new("mode")
         .required(false)
         .args(["full_auto", "semi_auto", "single_break"])
 ))]
+
+/// The configuration source to use.
+///
+/// config: Path to the TOML configuration file.
+/// resolved_config: Path to the resolved configuration file.
 #[command(group(
     ArgGroup::new("config_source")
         .required(true)
         .args(["config", "resolved_config"])
 ))]
 
-/*
-Cli struct
-    Represents the command line arguments and options for the STUFFIE program.
-    Uses clap for parsing command line arguments and options.
-
-    Fields:
-
-    config: Optional path to the TOML configuration file.
-    resolved_config: Optional path to the resolved configuration file.
-
-    full_auto: Flag indicating whether to execute all stages without pausing for user input.
-    semi_auto: Flag indicating whether to pause for user input only on stages marked with qa = true in the TOML file.
-    single_break: Flag indicating whether to pause for user input after every stage, regardless of the qa setting.
-*/
-
+/// The command-line interface for STUFFIE.
 struct Cli {
     #[arg(short = 'c', long = "config", value_name = "FILE")]
     config: Option<PathBuf>,
 
-    //Bring in ResolvedPipelineConfig from config.rs to main.rs
     #[arg(long = "resolved-config")]
     resolved_config: Option<PathBuf>,
 
@@ -96,19 +65,20 @@ struct Cli {
     #[arg(short = 'b', conflicts_with_all = ["full_auto", "semi_auto"])]
     single_break: bool,
 
-    /// Flag indicating whether to resume execution from the last completed stage, if a checkpoint exists.
     #[arg(long = "resume")]
     resume: bool,
 }
 
+/// Represents the source of the configuration, either a TOML file or a resolved configuration file.
 enum ConfigSource {
     File(PathBuf),
     Resolved(PathBuf),
 }
 
-// Implementation of ExecutionMode
+/// Implementation of ExecutionMode
+///
+/// This implementation provides methods to convert from command-line arguments to the ExecutionMode enum and to retrieve the corresponding CLI flag for each mode.
 impl config::ExecutionMode {
-    // Returns the mode requested on the command line, or None if no mode flag was given.
     fn from_cli(cli: &Cli) -> Option<Self> {
         if cli.full_auto {
             Some(config::ExecutionMode::FullAuto)
@@ -121,7 +91,7 @@ impl config::ExecutionMode {
         }
     }
 
-    // The CLI flag that selects this mode, used to forward it to child pipelines.
+    /// The CLI flag that selects this mode, used to forward it to child pipelines.
     fn flag(self) -> &'static str {
         match self {
             config::ExecutionMode::FullAuto => "-a",
@@ -131,8 +101,8 @@ impl config::ExecutionMode {
     }
 }
 
-// Prompts the user with a yes/no question and returns true for yes and false for no.
-// Used in wait_for_confirmation and run_stages to handle user input for pausing and resuming execution.
+/// Prompts the user with a yes/no question and returns true for yes and false for no.
+/// Used in wait_for_confirmation and run_stages to handle user input for pausing and resuming execution.
 fn prompt_yes_no(msg: &str) -> bool {
     loop {
         println!("{}", msg);
@@ -158,7 +128,7 @@ fn prompt_yes_no(msg: &str) -> bool {
     }
 }
 
-// Waits for the user to press Enter before continuing execution.
+/// Waits for the user to press Enter before continuing execution.
 fn wait_for_confirmation(stage_name: &str, output_dir: &Path) -> bool {
     println!("[STUFFIE] Stage '{}' complete.", stage_name);
     println!("[STUFFIE] Review outputs at {}.", output_dir.display());
@@ -173,12 +143,14 @@ fn should_pause(stage: &config::ResolvedStage, mode: &config::ExecutionMode) -> 
     }
 }
 
+/// Represents a checkpoint in the pipeline execution, storing the last completed stage index and name.
 #[derive(Serialize, Deserialize, Default)]
 pub struct Checkpoint {
     last_completed_stage: usize,
     last_completed_name: String,
 }
 
+/// Writes the checkpoint to a JSON file in the .stuffie directory of the output directory.
 async fn write_checkpoint(path: &Path, checkpoint: &Checkpoint) {
     let json = serde_json::to_string_pretty(checkpoint).unwrap_or_else(|e| {
         error!("Failed to serialize checkpoint: {}", e);
@@ -189,12 +161,25 @@ async fn write_checkpoint(path: &Path, checkpoint: &Checkpoint) {
         std::process::exit(1);
     });
 }
-/*
-Runs the stages of the pipeline sequentially, handling both command and pipeline stages.
 
-Creates the loggging directory and log files for each stage, and writes the output of each stage to its corresponding log file.
-Checks if the configuration is being run in a child process (stdin mode) or as the main process (file mode), and handles the execution accordingly.
-*/
+/// Runs the stages of the pipeline sequentially, handling both command and pipeline stages.
+///
+/// Creates the loggging directory and log files for each stage, and writes the output of each stage to its corresponding log file.
+/// Also checks if the cnfiguration is being run in a child process (stdin mode) or as the main process (file mode), and handles the execution accordingly.
+/// 
+///  # Arguments:
+///  * `stages` - A slice of ResolvedStage representing the stages to be executed.
+///  * `output_dir` - A reference to the Path of the output directory where logs and other outputs will be stored.
+///  * `mode` - A reference to the ExecutionMode indicating how the stages should be executed (full_auto, semi_auto, single_break).
+///  * `cli_mode` - An optional ExecutionMode that may have been specified via command-line arguments, used to forward the mode to child pipelines.
+///  * `resume` - A boolean indicating whether to resume from a previous checkpoint, if available.
+/// 
+///  # Returns:
+///  This function does not return a value, but it may exit the process with an error code if any stage fails or if there are issues with reading/writing files.
+/// 
+///  # Errors:
+///  This function may exit the process with an error code if any stage fails, if there are issues with reading/writing files, or if there are problems with user input during execution.
+
 async fn run_stages(
     stages: &[config::ResolvedStage],
     output_dir: &Path,
@@ -316,7 +301,6 @@ async fn run_stages(
                 let output = command
                     .output()
                     .await
-                    //.expect(&format!("Failed to launch stage: {}", stage.name));
                     .unwrap_or_else(|_| panic!("Failed to launch stage: {}", stage.name));
 
                 let mut log_contents = output.stdout.clone();
@@ -426,12 +410,11 @@ async fn run_stages(
             .unwrap_or_else(|e| panic!("[STUFFIE] Failed to remove checkpoint: {}", e));
     }
 }
-/*
-main function
-    Initializes logging and tracing, parses command line arguments, loads the pipeline configuration, and runs the stages of the pipeline.
-    Handles errors in loading the configuration and running the stages, and exits with an appropriate error code if any stage fails.
-*/
 
+/// The main function.
+///
+/// Initializes logging and tracing, parses command line arguments, loads the pipeline configuration, and runs the stages of the pipeline.
+/// Handles errors in loading the configuration and running the stages, and exits with an appropriate error code if any stage fails.
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
