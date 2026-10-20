@@ -1,8 +1,11 @@
 [package]
 name = "stuffie"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-
+authors = [
+    "Julianna Della Selva <julianna.dellaselva@uri.edu>",
+    "Liam McKenzie <liam.mckenzie@uri.edu>",
+]
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
@@ -10,3 +13,4 @@ toml = "0.8"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde_json = "1.0.151"

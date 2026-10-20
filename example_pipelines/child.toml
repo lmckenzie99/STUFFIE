@@ -1,0 +1,25 @@
+
+[pipeline]
+name = "child_pipeline"
+output_dir = "./output/child"
+source_dir = "./examples/input"
+mode = "semi_auto"
+
+[[stages]]
+name = "child_first"
+type = "command"
+cmd = "echo"
+args = ["Running the first child stage"]
+
+[[stages]]
+name = "child_quality_check"
+type = "command"
+cmd = "echo"
+args = ["Child quality check reached"]
+qa = true
+
+[[stages]]
+name = "child_finish"
+type = "command"
+cmd = "echo"
+args = ["Child pipeline completed"]

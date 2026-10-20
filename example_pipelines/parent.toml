@@ -1,0 +1,23 @@
+
+[pipeline]
+name = "parent_pipeline"
+output_dir = "./output/parent"
+source_dir = "./examples/input"
+mode = "semi_auto"
+
+[[stages]]
+name = "parent_start"
+type = "command"
+cmd = "echo"
+args = ["Starting parent pipeline"]
+
+[[stages]]
+name = "run_child_pipeline"
+type = "pipeline"
+path = "child.toml"
+
+[[stages]]
+name = "parent_finish"
+type = "command"
+cmd = "echo"
+args = ["Parent pipeline completed"]

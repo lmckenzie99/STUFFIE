@@ -1,262 +1,497 @@
-// 6 - 20 - 2026
-// STUFFIE: Sequential Task Utility For Flow Integration and Execution
-// Newest edit: Finalizing v1 of STUFFIE, cleaning up code, adding comments, and preparing for release.
-
-// The main entry point for the STUFFIE pipeline orchestrator.
-// This file defines the CLI, loads the config, and runs the stages in sequence based on the selected execution mode.
-
-// -----------------------------------------------------------------------------
-// Imports:
-// - clap for CLI parsing
-// - std::path::PathBuf for filesystem paths
-// - std::path::Path for path manipulation
-// - tokio::process::Command for asynchronous subprocess management
-// - tracing and tracing_subscriber for logging
-// - config module for config structs and loader function
-// -----------------------------------------------------------------------------
+//! STUFFIE: Sequential Task Utility For Flow Integration and Execution.
+//!
+//! The main entry point for STUFFIE, responsible for parsing command-line
+//! arguments, loading pipeline configurations, and executing pipeline stages.
 
 use clap::{ArgGroup, Parser};
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
+use std::io;
 use std::path::Path;
-use tokio::process::Command; 
-use tracing::{info, error};
-use tracing_subscriber;
+use std::path::PathBuf;
+use std::time::Instant;
+use tokio::process::Command;
+use tracing::{error, info};
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
-// Local module for config structs and loader function
 mod config;
 
-// -----------------------------------------------------------------------------
-// CLI Definition
-// -----------------------------------------------------------------------------
-
-// Using parser and debug derives for easy CLI parsing and debugging
+/// Command-line arguments and options for STUFFIE.
+///
+/// Uses `clap` to parse configuration sources and execution modes.
 #[derive(Parser, Debug)]
-// clap command attributes for name, version, about, and long_about
 #[command(name = "stuffie")]
 #[command(version)]
 #[command(about = "Sequential Task Utility For Flow Integration and Execution")]
 #[command(long_about = "
 STUFFIE is a minimal pipeline orchestrator for sequential multi-stage workflows.
 Each stage invokes a standalone program. Pipelines are defined in TOML config files.
-
-Execution modes are mutually exclusive — exactly one must be provided.
 ")]
 
-
-// Defining an argument group named "mode" that requires exactly one of the three execution mode flags
+/// The execution mode to use.
+///
+/// full_auto: Execute all stages without pausing for user input.
+/// semi_auto: Pause for user input only on stages marked with qa = true in the TOML file.
+/// single_break: Pause for user input after every stage, regardless of the qa setting.
 #[command(group(
     ArgGroup::new("mode")
-        .required(true)
+        .required(false)
         .args(["full_auto", "semi_auto", "single_break"])
 ))]
 
-// The CLI struct with fields for config path and execution mode flags
-// The config field is a required PathBuf with short and long flags
-struct Cli {
-    /// Path to the pipeline config file
-    #[arg(short = 'c', long = "config", required = true, value_name = "FILE")]
-    config: PathBuf,
+/// The configuration source to use.
+///
+/// config: Path to the TOML configuration file.
+/// resolved_config: Path to the resolved configuration file.
+#[command(group(
+    ArgGroup::new("config_source")
+        .required(true)
+        .args(["config", "resolved_config"])
+))]
 
-    /// Full-auto: run all stages start to finish, no pauses
+/// The command-line interface for STUFFIE.
+struct Cli {
+    #[arg(short = 'c', long = "config", value_name = "FILE")]
+    config: Option<PathBuf>,
+
+    #[arg(long = "resolved-config")]
+    resolved_config: Option<PathBuf>,
+
     #[arg(short = 'a', conflicts_with_all = ["semi_auto", "single_break"])]
     full_auto: bool,
 
-    /// Semi-auto: pause at stages marked qa = true in config
     #[arg(short = 's', conflicts_with_all = ["full_auto", "single_break"])]
     semi_auto: bool,
 
-    /// Single break: pause and prompt after every stage
     #[arg(short = 'b', conflicts_with_all = ["full_auto", "semi_auto"])]
     single_break: bool,
+
+    #[arg(long = "resume")]
+    resume: bool,
 }
 
-// -----------------------------------------------------------------------------
-// Execution Mode
-// -----------------------------------------------------------------------------
-
-/// Represents the three mutually exclusive execution modes STUFFIE supports.
-/// Derived from the raw CLI flags so downstream logic never touches bools.
-
-
-#[derive(Debug)]
-enum ExecutionMode {
-    /// Run all stages unattended, no QA pauses
-    FullAuto,
-    /// Pause only at stages marked `qa = true` in config
-    SemiAuto,
-    /// Pause and prompt after every stage regardless of qa flag
-    SingleBreak,
+/// Represents the source of the configuration, either a TOML file or a resolved configuration file.
+enum ConfigSource {
+    File(PathBuf),
+    Resolved(PathBuf),
 }
 
-/*
-from_cli is a function that belongs to ExecutionMode, 
-takes a reference to a Cli struct, 
-reads the three bool flags, and returns the right variant. 
-*/
-
-impl ExecutionMode {
-    fn from_cli(cli: &Cli) -> Self {
+/// Implementation of ExecutionMode
+///
+/// This implementation provides methods to convert from command-line arguments to the ExecutionMode enum and to retrieve the corresponding CLI flag for each mode.
+impl config::ExecutionMode {
+    fn from_cli(cli: &Cli) -> Option<Self> {
         if cli.full_auto {
-            ExecutionMode::FullAuto
+            Some(config::ExecutionMode::FullAuto)
         } else if cli.semi_auto {
-            ExecutionMode::SemiAuto
+            Some(config::ExecutionMode::SemiAuto)
+        } else if cli.single_break {
+            Some(config::ExecutionMode::SingleBreak)
         } else {
-            ExecutionMode::SingleBreak
+            None
+        }
+    }
+
+    /// The CLI flag that selects this mode, used to forward it to child pipelines.
+    fn flag(self) -> &'static str {
+        match self {
+            config::ExecutionMode::FullAuto => "-a",
+            config::ExecutionMode::SemiAuto => "-s",
+            config::ExecutionMode::SingleBreak => "-b",
         }
     }
 }
 
-//run_one is a helper function to run a single command with arguments, and print the output or error
-async fn run_one(cmd: &str, args: &[&str]) {
-    println!("[STUFFIE] Running command: {} {}", cmd, args.join(" "));
+/// Prompts the user with a yes/no question and returns true for yes and false for no.
+/// Used in wait_for_confirmation and run_stages to handle user input for pausing and resuming execution.
+fn prompt_yes_no(msg: &str) -> bool {
+    loop {
+        println!("{}", msg);
 
-    let output = Command::new(cmd)
-        .args(args)
-        .output()
-        .await
-        .expect(&format!("Failed to execute command: {} {}", cmd, args.join(" ")));
-
-        if output.status.success(){
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            println!("[STUFFIE] Command output: {}", stdout);
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("[STUFFIE] Command error: {}", stderr);
-
+        let mut input = String::new();
+        match io::stdin().read_line(&mut input) {
+            Ok(0) => {
+                error!("[STUFFIE] stdin closed; cannot prompt. Aborting.");
+                std::process::exit(2);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                error!("[STUFFIE] Failed to read input: {}", e);
+                std::process::exit(1);
+            }
         }
+
+        match input.trim().to_lowercase().as_str() {
+            "y" | "yes" => return true,
+            "n" | "no" => return false,
+            _ => println!("[STUFFIE] Please enter 'y' or 'n'."),
+        }
+    }
 }
 
-// A demo function to show how we might execute a stage based on the execution mode
-// Using Google Chrome as a demo program to launch
-// run_stages() below is the real implementation to be used.
-async fn run_demo_program(mode: &ExecutionMode) {
+/// Waits for the user to press Enter before continuing execution.
+fn wait_for_confirmation(stage_name: &str, output_dir: &Path) -> bool {
+    println!("[STUFFIE] Stage '{}' complete.", stage_name);
+    println!("[STUFFIE] Review outputs at {}.", output_dir.display());
+    prompt_yes_no("[STUFFIE] Continue? (y)es / (n)o abort:")
+}
+
+fn should_pause(stage: &config::ResolvedStage, mode: &config::ExecutionMode) -> bool {
     match mode {
-        ExecutionMode::FullAuto => {
-            println!("[STUFFIE] FullAuto selected, running demo program...");
-            println!("[STUFFIE] Launching Google Chrome and Date...");
-
-            tokio::join!(
-                run_one("open", &["-a", "Google Chrome"]),
-                run_one("date", &[]),
-            );
-
-            
-        }
-
-        ExecutionMode::SemiAuto => {
-            println!("[STUFFIE] SemiAuto selected, running demo program...");
-            println!("[STUFFIE] Launching Safari...");
-            
-            run_one("open", &["-a", "Safari"]).await;
-            
-
-        }
-
-        ExecutionMode::SingleBreak => {
-            println!("[STUFFIE] SingleBreak selected, running demo program...");
-            println!("[STUFFIE] Launching Calendar...");
-
-           
-            run_one("open", &["-a", "Calendar"]).await;
-            
-        }
+        config::ExecutionMode::FullAuto => false,
+        config::ExecutionMode::SemiAuto => stage.qa.unwrap_or(false),
+        config::ExecutionMode::SingleBreak => true,
     }
 }
 
-// A function to run the stages defined in the config file, demonstrating how we might summon subprocesses
-// Async because we'll want to await the completion of each stage before moving on to the next one, and also to handle any potential errors that might arise from running the commands.
-async fn run_stages(stages: &Vec<config::Stage>, output_dir: &Path) {
-    
+/// Represents a checkpoint in the pipeline execution, storing the last completed stage index and name.
+#[derive(Serialize, Deserialize, Default)]
+pub struct Checkpoint {
+    last_completed_stage: usize,
+    last_completed_name: String,
+}
+
+/// Writes the checkpoint to a JSON file in the .stuffie directory of the output directory.
+async fn write_checkpoint(path: &Path, checkpoint: &Checkpoint) {
+    let json = serde_json::to_string_pretty(checkpoint).unwrap_or_else(|e| {
+        error!("Failed to serialize checkpoint: {}", e);
+        std::process::exit(1);
+    });
+    tokio::fs::write(path, json).await.unwrap_or_else(|e| {
+        error!("Failed to write checkpoint: {}", e);
+        std::process::exit(1);
+    });
+}
+
+/// Runs the stages of the pipeline sequentially, handling both command and pipeline stages.
+///
+/// Creates the loggging directory and log files for each stage, and writes the output of each stage to its corresponding log file.
+/// Also checks if the cnfiguration is being run in a child process (stdin mode) or as the main process (file mode), and handles the execution accordingly.
+/// 
+///  # Arguments:
+///  * `stages` - A slice of ResolvedStage representing the stages to be executed.
+///  * `output_dir` - A reference to the Path of the output directory where logs and other outputs will be stored.
+///  * `mode` - A reference to the ExecutionMode indicating how the stages should be executed (full_auto, semi_auto, single_break).
+///  * `cli_mode` - An optional ExecutionMode that may have been specified via command-line arguments, used to forward the mode to child pipelines.
+///  * `resume` - A boolean indicating whether to resume from a previous checkpoint, if available.
+/// 
+///  # Returns:
+///  This function does not return a value, but it may exit the process with an error code if any stage fails or if there are issues with reading/writing files.
+/// 
+///  # Errors:
+///  This function may exit the process with an error code if any stage fails, if there are issues with reading/writing files, or if there are problems with user input during execution.
+
+async fn run_stages(
+    stages: &[config::ResolvedStage],
+    output_dir: &Path,
+    mode: &config::ExecutionMode,
+    cli_mode: Option<config::ExecutionMode>,
+    resume: bool,
+) {
+    let internal_dir = output_dir.join(".stuffie");
+    let checkpoint_path = internal_dir.join("checkpoint.json");
+
+    let mut resume_children = resume;
+
+    let mut checkpoint: Checkpoint = if resume
+        && tokio::fs::try_exists(&checkpoint_path)
+            .await
+            .unwrap_or(false)
+    {
+        let checkpoint_contents = tokio::fs::read_to_string(&checkpoint_path)
+            .await
+            .unwrap_or_else(|e| {
+                error!("Failed to read checkpoint: {}", e);
+                std::process::exit(1);
+            });
+
+        let checkpoint: Checkpoint =
+            serde_json::from_str(&checkpoint_contents).unwrap_or_else(|e| {
+                error!("Failed to parse checkpoint: {}", e);
+                std::process::exit(1);
+            });
+
+        let done = checkpoint.last_completed_stage;
+        let stale = done > stages.len()
+            || (done > 0 && stages[done - 1].name != checkpoint.last_completed_name);
+
+        let restart = if stale {
+            println!(
+                "[STUFFIE] Checkpoint doesn't match this pipeline (last completed: '{}').",
+                checkpoint.last_completed_name
+            );
+            if !prompt_yes_no("[STUFFIE] Restart from the beginning? (y)es / (n)o abort:") {
+                std::process::exit(2);
+            }
+            true
+        } else {
+            println!(
+                "[STUFFIE] Checkpoint found. Last completed stage: '{}'",
+                checkpoint.last_completed_name
+            );
+            let next = stages
+                .get(done)
+                .map(|s| s.name.as_str())
+                .unwrap_or("(end of pipeline)");
+            if matches!(mode, config::ExecutionMode::FullAuto) {
+                println!("[STUFFIE] Full-auto: resuming from '{}'.", next);
+                false
+            } else {
+                !prompt_yes_no(&format!(
+                    "[STUFFIE] Resume from '{}'? (y)es / (n)o restart:",
+                    next
+                ))
+            }
+        };
+
+        if restart {
+            resume_children = false;
+            let _ = tokio::fs::remove_file(&checkpoint_path).await;
+            println!("[STUFFIE] Restarting from the beginning.");
+            Checkpoint::default()
+        } else {
+            checkpoint
+        }
+    } else {
+        Checkpoint::default()
+    };
+
+    tokio::fs::create_dir_all(output_dir)
+        .await
+        .unwrap_or_else(|e| panic!("[STUFFIE] Failed to create output directory: {}", e));
+
     let log_dir = output_dir.join("logs");
 
-    // Create the log directory if it doesn't exist, using tokio's async fs functions. If it fails, print an error and exit.
-    let create_dirs = tokio::fs::create_dir_all(&log_dir).await;
+    tokio::fs::create_dir_all(&log_dir)
+        .await
+        .unwrap_or_else(|e| panic!("[STUFFIE] Failed to create log directory: {}", e));
 
-    if let Err(e) = create_dirs {
-        error!("[STUFFIE] Failed to create log directory: {}", e);
-        std::process::exit(1);
-    }
-
-    for stage in stages {
-        info!("[STUFFIE] Running stage: {}", stage.name);
-        
-        let mut cmd = Command::new(&stage.cmd);
-
-        let log_file = log_dir.join(format!("{}.log", stage.name.replace(" ", "_")));
-        
-        // If the stage has args, add them to the command
-        if let Some(args) = &stage.args {
-            cmd.args(args);
-        }
-        
-        // Spawn the command and wait for it to finish, checking the exit status
-        // await the status of the command, and if it fails, print an error and exit the whole program
-        let output = cmd.output().await
-            .expect(&format!("Failed to launch stage: {}", stage.name));
-        
-        // Write the combined stdout and stderr to a log file for this stage
-        let mut log_contents = output.stdout.clone();
-            log_contents.extend_from_slice(&output.stderr); 
-        
-        // Using tokio's async fs functions to write the log file, and if it fails, print an error and exit
-        tokio::fs::write(&log_file, log_contents).await
-            .expect(&format!("Failed to write log file: {}", log_file.display()));
-        
-            // If the command failed (non-zero exit code), print an error and exit the whole program
-        if !output.status.success() {
-            error!("[STUFFIE] Stage '{}' failed with exit code {:?}", stage.name, output.status.code());
+    tokio::fs::create_dir_all(&internal_dir)
+        .await
+        .unwrap_or_else(|e| {
+            error!("Failed to create .stuffie directory: {}", e);
             std::process::exit(1);
+        });
+
+    for (index, stage) in stages.iter().enumerate() {
+        let stage_number = index + 1;
+
+        if stage_number <= checkpoint.last_completed_stage {
+            continue;
         }
-        
-        // Or else, print that the stage completed successfully
-        info!("[STUFFIE] Stage '{}' completed ", stage.name);
+
+        info!(
+            "[STUFFIE] Running stage {}/{}: {}",
+            stage_number,
+            stages.len(),
+            stage.name
+        );
+
+        let log_file = log_dir.join(format!("stage_{:03}.log", stage_number));
+
+        let start_time = Instant::now();
+
+        match &stage.kind {
+            config::ResolvedStageKind::Command { cmd, args } => {
+                let mut command = Command::new(cmd);
+
+                if let Some(args) = args {
+                    command.args(args);
+                }
+
+                let output = command
+                    .output()
+                    .await
+                    .unwrap_or_else(|_| panic!("Failed to launch stage: {}", stage.name));
+
+                let mut log_contents = output.stdout.clone();
+                log_contents.extend_from_slice(&output.stderr);
+
+                tokio::fs::write(&log_file, log_contents)
+                    .await
+                    .unwrap_or_else(|_| panic!("Failed to write log file: {}", log_file.display()));
+
+                if !output.status.success() {
+                    error!(
+                        "[STUFFIE] Stage '{}' failed with exit code {:?}",
+                        stage.name,
+                        output.status.code()
+                    );
+                    std::process::exit(1);
+                }
+            }
+
+            config::ResolvedStageKind::Pipeline(boxed_config) => {
+                let serialized_config = serde_json::to_string(&boxed_config).unwrap();
+
+                let internal_output_dir = boxed_config.output_dir.join(".stuffie");
+
+                tokio::fs::create_dir_all(&internal_output_dir)
+                    .await
+                    .unwrap_or_else(|_| {
+                        panic!(
+                            "Failed to create internal output directory: {}",
+                            internal_output_dir.display()
+                        )
+                    });
+
+                tokio::fs::write(
+                    internal_output_dir.join("resolved_config.json"),
+                    serialized_config.as_bytes(),
+                )
+                .await
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "Failed to write resolved config file: {}",
+                        internal_output_dir.join("resolved_config.json").display()
+                    )
+                });
+
+                let mut command = Command::new(std::env::current_exe().unwrap());
+
+                command
+                    .arg("--resolved-config")
+                    .arg(internal_output_dir.join("resolved_config.json"));
+
+                if let Some(m) = cli_mode {
+                    command.arg(m.flag());
+                }
+
+                if resume_children {
+                    command.arg("--resume");
+                }
+
+                let mut child = command
+                    .spawn()
+                    .unwrap_or_else(|_| panic!("Failed to spawn child pipeline: {}", stage.name));
+
+                let status: std::process::ExitStatus = child.wait().await.unwrap_or_else(|_| {
+                    panic!("Failed to wait for child pipeline: {}", stage.name)
+                });
+
+                if status.code() == Some(2) {
+                    info!("[STUFFIE] Child pipeline '{}' aborted by user.", stage.name);
+                    std::process::exit(2);
+                }
+
+                if !status.success() {
+                    error!(
+                        "[STUFFIE] Child pipeline '{}' failed with exit code {:?}",
+                        stage.name,
+                        status.code()
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        info!(
+            "[STUFFIE] Stage '{}' completed in {:.2} seconds",
+            stage.name,
+            start_time.elapsed().as_secs_f64()
+        );
+
+        checkpoint.last_completed_stage += 1;
+        checkpoint.last_completed_name = stage.name.clone();
+        write_checkpoint(&checkpoint_path, &checkpoint).await;
+
+        if should_pause(stage, mode) {
+            if !wait_for_confirmation(&stage.name, output_dir) {
+                info!("[STUFFIE] Pipeline stopped by user.");
+                std::process::exit(2);
+            }
+        }
+    }
+    if tokio::fs::try_exists(&checkpoint_path)
+        .await
+        .unwrap_or(false)
+    {
+        tokio::fs::remove_file(&checkpoint_path)
+            .await
+            .unwrap_or_else(|e| panic!("[STUFFIE] Failed to remove checkpoint: {}", e));
     }
 }
 
-// -----------------------------------------------------------------------------
-// Entry Point
-// -----------------------------------------------------------------------------
-
-// Using tokio main macro to allow for async main function, which is necessary for awaiting the completion of subprocesses in run_stages
+/// The main function.
+///
+/// Initializes logging and tracing, parses command line arguments, loads the pipeline configuration, and runs the stages of the pipeline.
+/// Handles errors in loading the configuration and running the stages, and exits with an appropriate error code if any stage fails.
 #[tokio::main]
 async fn main() {
-    // Initialize the tracing subscriber for logging. This sets up the global default subscriber that will handle all log events and write everything to the console.
-    // Changed it to remove the need to run RUST_LOG=debug when running the program, and to include timestamps in the logs for better visibility.
-
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-            .init();
-
     let cli = Cli::parse();
-    
-    // Call the from_cli function that belongs to ExecutionMode, passing in a reference to cli, 
-    // and store the result in a variable named mode
-    let mode = ExecutionMode::from_cli(&cli);
 
-    // Validate that the config file actually exists before doing anything else
-    if !cli.config.exists() {
-        error!("[STUFFIE] Error: config file not found: {}", cli.config.display());
-        std::process::exit(1);
-    }
+    let config_source = if let Some(path) = &cli.config {
+        ConfigSource::File(path.clone())
+    } else if let Some(path) = &cli.resolved_config {
+        ConfigSource::Resolved(path.clone())
+    } else {
+        unreachable!("[STUFFIE] A configuration source is required by clap")
+    };
 
-    info!("[STUFFIE] Config:  {}", cli.config.display());
-    info!("[STUFFIE] Mode:    {:?}", mode);
+    let pipeline_config = match &config_source {
+        ConfigSource::File(path) => match config::resolve_config(path, vec![]) {
+            Ok(cfg) => cfg,
 
-    // Load and deserialize the config file
-    let pipeline_config = match config::load_config(&cli.config) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            error!("[STUFFIE] Error loading config: {}", e);
-            std::process::exit(1);
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        },
+        ConfigSource::Resolved(path) => {
+            match std::fs::read_to_string(path)
+                .map_err(|e| format!("[STUFFIE] Failed to read resolved config: {}", e))
+                .and_then(|input| {
+                    serde_json::from_str::<config::ResolvedPipelineConfig>(&input)
+                        .map_err(|e| format!("[STUFFIE] Failed to parse resolved config: {}", e))
+                }) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            }
         }
     };
 
-    info!("[STUFFIE] Pipeline: {}", pipeline_config.pipeline.name);
-    info!("[STUFFIE] Stages:   {}", pipeline_config.stages.len());
+    let cli_mode = config::ExecutionMode::from_cli(&cli);
+    let mode = cli_mode.unwrap_or(pipeline_config.mode);
 
-    // Running stages is the core of the program execution module, 
-    // So we'll call a function named run_stages and pass in a reference to the stages vector from the pipeline config.
-    // run_stages will be an async function that iterates through the stages, runs each command, and awaits its completion before moving on to the next one.
-    run_stages(&pipeline_config.stages, &pipeline_config.pipeline.output_dir).await;
-    run_demo_program(&mode).await;
+    tokio::fs::create_dir_all(&pipeline_config.output_dir)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("[STUFFIE] Failed to create output directory: {}", e);
+            std::process::exit(1);
+        });
+
+    let log_dir = pipeline_config.output_dir.join("logs");
+
+    tokio::fs::create_dir_all(&log_dir)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("[STUFFIE] Failed to create log directory: {}", e);
+            std::process::exit(1);
+        });
+
+    let log_file = log_dir.join("stuffie.log");
+
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+        .expect("[STUFFIE] Failed to open log file");
+
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(std::io::stdout.and(file))
+        .init();
+
+    info!("[STUFFIE] Starting pipeline: {}", &pipeline_config.name);
+
+    run_stages(
+        &pipeline_config.stages,
+        &pipeline_config.output_dir,
+        &mode,
+        cli_mode,
+        cli.resume,
+    )
+    .await;
 }
